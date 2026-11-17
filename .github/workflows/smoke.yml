@@ -1,0 +1,17 @@
+name: GitHub runner smoke
+
+on:
+  push:
+    paths:
+      - '.github/workflows/smoke.yml'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Print smoke marker
+        run: echo SMOKE_TEST_OK
