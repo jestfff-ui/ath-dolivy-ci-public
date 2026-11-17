@@ -1,0 +1,31 @@
+{
+  "name": "doliv-mini-app",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build && node scripts/compress.mjs",
+    "test": "vitest run",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "@telegram-apps/telegram-ui": "2.1.13",
+    "@tma.js/sdk-react": "3.0.23",
+    "pdfjs-dist": "6.5.438",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "prettier": "3.9.10",
+    "typescript": "^5.9.0",
+    "vite": "8.3.5",
+    "vitest": "5.1.0"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "npm@11.6.2"
+}

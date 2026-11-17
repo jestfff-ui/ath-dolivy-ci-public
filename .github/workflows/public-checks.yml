@@ -1,0 +1,119 @@
+name: Public CI checks
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  service-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Check isolated PostgreSQL 17 and Redis 8.10.3
+        shell: bash
+        run: |
+          set -euo pipefail
+          pg=public-ci-postgres
+          redis=public-ci-redis
+          cleanup() {
+            docker rm -fv "$pg" "$redis" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker run -d --name "$pg" --network none \
+            --env POSTGRES_USER=ci_synthetic --env POSTGRES_DB=ci_synthetic \
+            --env POSTGRES_HOST_AUTH_METHOD=trust postgres:17 \
+            -c listen_addresses=127.0.0.1 >/dev/null
+          docker run -d --name "$redis" --network none redis:8.10.3-alpine \
+            redis-server --bind 127.0.0.1 --save "" --appendonly no >/dev/null
+
+          ready=false
+          for attempt in {1..45}; do
+            if docker exec "$pg" pg_isready -q -h 127.0.0.1 -U ci_synthetic -d ci_synthetic \
+              && [[ "$(docker exec "$redis" redis-cli PING)" == PONG ]]; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = true
+          result=$(docker exec -i "$pg" psql -XAtq -v ON_ERROR_STOP=1 -h 127.0.0.1 \
+            -U ci_synthetic -d ci_synthetic <<'SQL'
+          BEGIN;
+          CREATE TEMP TABLE public_ci_fixture (marker text NOT NULL);
+          INSERT INTO public_ci_fixture VALUES ('SYNTHETIC_PG_OK');
+          SELECT marker FROM public_ci_fixture
+          WHERE current_setting('server_version_num')::integer BETWEEN 170000 AND 179999;
+          ROLLBACK;
+          SQL
+          )
+          test "$result" = SYNTHETIC_PG_OK
+          test "$(docker exec "$redis" redis-cli --raw INFO server | tr -d '\r' | grep '^redis_version:')" = redis_version:8.10.3
+          test "$(docker exec "$redis" redis-cli -n 15 SET public-ci:fixture SYNTHETIC_REDIS_OK EX 30)" = OK
+          test "$(docker exec "$redis" redis-cli -n 15 GET public-ci:fixture)" = SYNTHETIC_REDIS_OK
+          echo SYNTHETIC_SERVICES_OK
+
+  linux-browser-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r tests/e2e/requirements.txt pytest==9.2.0 pytest-timeout==2.4.0
+      - run: python -m playwright install --with-deps chromium
+      - run: python -Im pytest -q -s -p pytest_timeout --timeout=180 --session-timeout=300 --confcutdir=tests/public_ci tests/public_ci/test_chromium_boot.py
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+
+  staging-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pytest==9.2.0 pytest-timeout==2.4.0
+      - run: python -I -c 'import asyncio, sys; import pytest; raise SystemExit(pytest.main(sys.argv[1:]))' -q -p pytest_timeout --timeout=180 --session-timeout=300 --confcutdir=tests/staging tests/staging/test_staging_guard.py
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+
+  python-dependency-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pip-audit==2.10.1
+      - run: python -m pip_audit --strict --no-deps --disable-pip --progress-spinner off -r requirements.lock -r tests/e2e/requirements.txt
+
+  frontend-dependency-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: frontend/.node-version
+      - run: npm audit --package-lock-only
+        working-directory: frontend
